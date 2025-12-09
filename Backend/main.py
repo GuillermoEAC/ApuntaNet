@@ -580,11 +580,14 @@ def login():
         password = data.get('password')
         
         cursor = conn.cursor()
+        
+        # --- CAMBIO AQUÍ: Usamos HEX(...) alrededor del AES_ENCRYPT ---
         cursor.execute("""
             SELECT id, usuario 
             FROM usuarios 
-            WHERE usuario = %s AND password = AES_ENCRYPT(%s, %s)
+            WHERE usuario = %s AND password = HEX(AES_ENCRYPT(%s, %s))
         """, (usuario, password, SECRET_KEY))
+        # -------------------------------------------------------------
         
         resultado = cursor.fetchone()
         
@@ -605,6 +608,7 @@ def login():
         if conn and conn.is_connected():
             cursor.close()
             conn.close()
+# --- RUTAS DE HOGAR ---
 
 @Api.route("/registro", methods=['POST'])
 def registro():
@@ -614,10 +618,16 @@ def registro():
     try:
         data = request.get_json()
         cursor = conn.cursor()
+        
+        # --- CAMBIO AQUÍ: Usamos HEX(...) para el password ---
+        # Nota: Correo y teléfono pueden quedarse igual si usas CAST(... AS CHAR) al leerlos, 
+        # pero el password es el crítico para el login.
         cursor.execute("""
              INSERT INTO usuarios (usuario, password, correo, telefono)
-             VALUES (%s, aes_encrypt(%s, %s), aes_encrypt(%s, %s), aes_encrypt(%s, %s));
+             VALUES (%s, HEX(AES_ENCRYPT(%s, %s)), aes_encrypt(%s, %s), aes_encrypt(%s, %s));
         """, (data['usuario'], data['password'], SECRET_KEY, data['correo'], SECRET_KEY, data['telefono'], SECRET_KEY))
+        # ----------------------------------------------------
+        
         conn.commit()
         return jsonify({"status": "Correcto", "message": "Usuario registrado exitosamente"}), 201
     except mysql.connector.Error as err:
@@ -626,20 +636,6 @@ def registro():
         if conn and conn.is_connected():
             cursor.close()
             conn.close()
-
-# --- RUTAS DE HOGAR ---
-
-@Api.route("/bienvenida", methods=['POST'])
-def bienvenida():
-    data = request.get_json()
-    accion = data.get('accion')
-    
-    if accion == 'crear':
-        return crear_hogar(data)
-    elif accion == 'unirse':
-        return unirse_hogar(data)
-    else:
-        return jsonify({"status": "error", "message": "Acción no válida"}), 400
 
 def crear_hogar(data):
     conn = get_db_connection()
