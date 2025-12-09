@@ -569,17 +569,12 @@ def get_db_connection():
         return None
 
 def obtener_id_desde_token(req):
-    """
-    Busca el token en Body o Headers, lo limpia y devuelve el ID de usuario.
-    Lanza excepciones si falla para que la ruta lo maneje.
-    """
+    """Busca el token en Body o Headers, lo limpia y devuelve el ID de usuario."""
     token = None
-    # 1. Buscar en Body
     data = req.get_json(silent=True)
     if data and 'token' in data:
         token = data['token']
     
-    # 2. Buscar en Header
     if not token:
         auth_header = req.headers.get('Authorization')
         if auth_header:
@@ -588,11 +583,9 @@ def obtener_id_desde_token(req):
     if not token:
         raise Exception("Token no encontrado")
 
-    # 3. Limpiar "Bearer "
     if "Bearer " in token:
         token = token.split(" ")[1]
 
-    # 4. Decodificar
     decoded = jwt.decode(token, SECRET_KEY, algorithms=['HS256'])
     return decoded['id_usuario']
 
@@ -617,7 +610,6 @@ def registro():
     try:
         data = request.get_json()
         cursor = conn.cursor()
-        # Usamos HEX(AES_ENCRYPT(...)) para compatibilidad binaria
         query = """
              INSERT INTO usuarios (usuario, password, correo, telefono)
              VALUES (%s, HEX(AES_ENCRYPT(%s, %s)), aes_encrypt(%s, %s), aes_encrypt(%s, %s));
@@ -649,7 +641,6 @@ def login():
         password = data.get('password')
         
         cursor = conn.cursor()
-        # Comparamos usando HEX(...)
         cursor.execute("""
             SELECT id, usuario 
             FROM usuarios 
@@ -675,29 +666,21 @@ def login():
             cursor.close()
             conn.close()
 
-# --- RUTAS DE HOGAR ---
+# --- RUTAS DE HOGAR (Gestión Básica) ---
 
 @Api.route("/bienvenida", methods=['POST'])
 def bienvenida():
     data = request.get_json()
     accion = data.get('accion')
-    
-    if accion == 'crear':
-        return crear_hogar(data)
-    elif accion == 'unirse':
-        return unirse_hogar(data)
-    else:
-        return jsonify({"status": "error", "message": "Acción no válida"}), 400
+    if accion == 'crear': return crear_hogar(data)
+    elif accion == 'unirse': return unirse_hogar(data)
+    else: return jsonify({"status": "error", "message": "Acción no válida"}), 400
 
 def crear_hogar(data):
     conn = get_db_connection()
     if not conn: return jsonify({"status": "error", "message": "Error de conexión BD"}), 500
-    
     try:
-        # Nota: Aquí asumo que tu frontend manda el id_usuario explícitamente en el body para crear
-        # Si quisieras usar el token, usaríamos obtener_id_desde_token(request)
         id_usuario = data.get('id_usuario') 
-        
         codigo = crearcodigo(conn)
         cursor = conn.cursor()
         
@@ -724,12 +707,8 @@ def crear_hogar(data):
 def unirse_hogar(data):
     conn = get_db_connection()
     if not conn: return jsonify({"status": "error", "message": "Error de conexión BD"}), 500
-
     try:
-        # Aquí usamos la función robusta porque 'unirse' requiere token seguro
-        # Pero como esta funcion recibe 'data' desde bienvenida, intentamos sacar el token del request global
         id_usuario = obtener_id_desde_token(request)
-        
         cursor = conn.cursor()
         cursor.execute("SELECT estado FROM usuarios WHERE Id = %s", (id_usuario,))
         estado = cursor.fetchone()
@@ -749,8 +728,6 @@ def unirse_hogar(data):
         cursor.execute("UPDATE usuarios SET estado = 'A' WHERE Id = %s", (id_usuario,))
         conn.commit()
         return jsonify({"status": "Correcto", "message": "Ingreso exitoso"}), 201
-    except jwt.ExpiredSignatureError:
-        return jsonify({"status": "error", "message": "Token expirado"}), 401
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
     finally:
@@ -762,13 +739,10 @@ def unirse_hogar(data):
 def consultar_hogar():
     conn = get_db_connection()
     if not conn: return jsonify({"status": "error", "message": "Error de conexión BD"}), 500
-    
     try:
         id_usuario = obtener_id_desde_token(request)
-        
         cursor = conn.cursor()
         hogares = []
-
         query = """
             SELECT h.id, h.nombre, h.descripcion, h.codigo, h.fecha_creacion, 'true' as es_creador
             FROM hogar h WHERE h.id_usuario = %s
@@ -777,22 +751,13 @@ def consultar_hogar():
             FROM hogar h JOIN casas_usuarios cu ON h.id = cu.id_hogar WHERE cu.id_usuario = %s
         """
         cursor.execute(query, (id_usuario, id_usuario))
-        
         for row in cursor.fetchall():
             hogares.append({
-                'id': row[0], 
-                'nombre': row[1], 
-                'descripcion': row[2], 
-                'codigo': row[3], 
-                'fecha_creacion': str(row[4]), 
-                'es_creador': (row[5] == 'true' or row[5] == 1)
+                'id': row[0], 'nombre': row[1], 'descripcion': row[2], 
+                'codigo': row[3], 'fecha_creacion': str(row[4]), 'es_creador': (row[5] == 'true' or row[5] == 1)
             })
-            
         return jsonify({"status": "Correcto", "hogares": hogares}), 200
-    except jwt.ExpiredSignatureError:
-        return jsonify({"status": "error", "message": "Token expirado"}), 401
     except Exception as e:
-        print(f"Error consultarHogar: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
     finally:
         if conn and conn.is_connected():
@@ -803,41 +768,203 @@ def consultar_hogar():
 def salirse_hogar():
     conn = get_db_connection()
     if not conn: return jsonify({"status": "error", "message": "Error de conexión BD"}), 500
-
     try:
         id_usuario = obtener_id_desde_token(request)
         cursor = conn.cursor()
-
-        # Verificar si es Creador (Disuelve el hogar)
+        # Lógica de disolución/salida simplificada para brevedad, asumiendo la lógica previa es correcta
         cursor.execute("SELECT id FROM hogar WHERE id_usuario = %s", (id_usuario,))
         creador_hogar = cursor.fetchone()
-
         if creador_hogar:
             id_hogar = creador_hogar[0]
-            # Liberar a todos los miembros
             cursor.execute("UPDATE usuarios SET estado = '' WHERE Id IN (SELECT id_usuario FROM casas_usuarios WHERE id_hogar = %s)", (id_hogar,))
-            # Borrar relaciones
             cursor.execute("DELETE FROM casas_usuarios WHERE id_hogar = %s", (id_hogar,))
-            # Borrar hogar
             cursor.execute("DELETE FROM hogar WHERE id = %s", (id_hogar,))
-            # Liberar creador
             cursor.execute("UPDATE usuarios SET estado = '' WHERE Id = %s", (id_usuario,))
             conn.commit()
             return jsonify({"status": "Correcto", "message": "Hogar disuelto exitosamente"}), 200
 
-        # Verificar si es Miembro (Solo se sale)
         cursor.execute("SELECT id_hogar FROM casas_usuarios WHERE id_usuario = %s", (id_usuario,))
         miembro_hogar = cursor.fetchone()
-
         if miembro_hogar:
             id_hogar = miembro_hogar[0]
             cursor.execute("DELETE FROM casas_usuarios WHERE id_usuario = %s AND id_hogar = %s", (id_usuario, id_hogar))
             cursor.execute("UPDATE usuarios SET estado = '' WHERE Id = %s", (id_usuario,))
             conn.commit()
             return jsonify({"status": "Correcto", "message": "Has salido del hogar"}), 200
-
         return jsonify({"status": "error", "message": "No perteneces a ningún hogar"}), 400
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        if conn and conn.is_connected():
+            cursor.close()
+            conn.close()
 
+# --- RUTAS DE RESIDENTES Y CATEGORÍAS (RECUPERADAS) ---
+
+@Api.route('/hogar/residentes/<int:id_hogar>', methods=['GET'])
+def obtener_residentes(id_hogar):
+    conn = get_db_connection()
+    if not conn: return jsonify({"status": "error", "message": "Error de conexión BD"}), 500
+    try:
+        cursor = conn.cursor(dictionary=True)
+        # Creador
+        cursor.execute("""
+            SELECT u.Id AS id, u.usuario, 
+                   CAST(AES_DECRYPT(u.correo, %s) AS CHAR) AS correo,
+                   CAST(AES_DECRYPT(u.telefono, %s) AS CHAR) AS telefono,
+                   h.fecha_creacion AS fecha, TRUE AS es_creador
+            FROM usuarios u JOIN hogar h ON u.Id = h.id_usuario WHERE h.id = %s
+        """, (SECRET_KEY, SECRET_KEY, id_hogar))
+        residentes = cursor.fetchall()
+
+        # Miembros
+        cursor.execute("""
+            SELECT u.Id AS id, u.usuario, 
+                   CAST(AES_DECRYPT(u.correo, %s) AS CHAR) AS correo,
+                   CAST(AES_DECRYPT(u.telefono, %s)AS CHAR) AS telefono, 
+                   cu.fecha_ingreso AS fecha, FALSE AS es_creador
+            FROM usuarios u JOIN casas_usuarios cu ON u.Id = cu.id_usuario WHERE cu.id_hogar = %s
+        """, (SECRET_KEY, SECRET_KEY, id_hogar))
+        residentes += cursor.fetchall()
+        
+        return jsonify({"status": "Correcto", "residentes": residentes}), 200
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        if conn and conn.is_connected():
+            cursor.close()
+            conn.close()
+
+@Api.route("/categorias-hogar/agregar", methods=['POST'])
+def agregar_categoria_a_hogar():
+    conn = get_db_connection()
+    if not conn: return jsonify({"status": "error", "message": "Error de conexión BD"}), 500
+    try:
+        data = request.get_json()
+        id_hogar = data.get('id_hogar')
+        id_categoria = data.get('id_categoria')
+
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1 FROM categorias_hogar WHERE id_hogar = %s AND id_categoria = %s", (id_hogar, id_categoria))
+        if cursor.fetchone():
+            return jsonify({"status": "error", "message": "La categoría ya está asignada"}), 400
+
+        cursor.execute("INSERT INTO categorias_hogar (id_hogar, id_categoria) VALUES (%s, %s)", (id_hogar, id_categoria))
+        conn.commit()
+        return jsonify({"status": "Correcto", "message": "Categoría asociada correctamente"}), 201
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        if conn and conn.is_connected():
+            cursor.close()
+            conn.close()
+
+@Api.route("/categorias/disponible/<int:id_hogar>", methods=['GET'])
+def obtener_categorias_disponibles(id_hogar):
+    conn = get_db_connection()
+    if not conn: return jsonify({"status": "error", "message": "Error de conexión BD"}), 500
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT c.id, c.nombre, c.descripcion
+            FROM categoria c
+            WHERE c.id NOT IN (SELECT ch.id_categoria FROM categorias_hogar ch WHERE ch.id_hogar = %s)
+        """, (id_hogar,))
+        categorias = cursor.fetchall()
+        return jsonify(categorias), 200
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        if conn and conn.is_connected():
+            cursor.close()
+            conn.close()
+
+@Api.route("/categorias/seleccionadas/<int:id_hogar>", methods=["GET"])
+def obtener_categorias_seleccionadas(id_hogar):
+    conn = get_db_connection()
+    if not conn: return jsonify({"status": "error", "message": "Error de conexión BD"}), 500
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT ch.id AS id, c.nombre, c.descripcion
+            FROM categoria c JOIN categorias_hogar ch ON c.id = ch.id_categoria
+            WHERE ch.id_hogar = %s
+        """, (id_hogar,))
+        categorias = cursor.fetchall()
+        return jsonify(categorias), 200
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        if conn and conn.is_connected():
+            cursor.close()
+            conn.close()
+
+# --- RUTAS DE TICKETS Y FINANZAS ---
+
+@Api.route("/tickets", methods=["POST"])
+def crear_ticket():
+    conn = get_db_connection()
+    if not conn: return jsonify({"status": "error", "message": "Error de conexión BD"}), 500
+    try:
+        data = request.json
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO ticket (id_categoriahogar, nombre, descripcion, id_usuario, monto_total, fecha_creacion, fecha_expiracion, estado)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """, (data["id_categoriahogar"], data["nombre"], data.get("descripcion", ""), data["id_usuario"], data["monto_total"], data["fecha_creacion"], data["fecha_expiracion"], data["estado"]))
+        conn.commit()
+        return jsonify({"status": "success", "message": "Ticket creado correctamente"}), 201
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        if conn and conn.is_connected():
+            cursor.close()
+            conn.close()
+
+@Api.route("/tickets/pendientes/<int:id_hogar>", methods=["GET"])
+def obtener_tickets_pendientes(id_hogar):
+    conn = get_db_connection()
+    if not conn: return jsonify({"status": "error", "message": "Error de conexión BD"}), 500
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT t.id, t.nombre, t.descripcion, t.monto_total, t.fecha_creacion, t.fecha_expiracion, 
+                   u.usuario as nombre_usuario, c.nombre as nombre_categoria
+            FROM ticket t 
+            JOIN usuarios u ON t.id_usuario = u.id
+            JOIN categorias_hogar ch ON t.id_categoriahogar = ch.id
+            JOIN categoria c ON ch.id_categoria = c.id
+            WHERE ch.id_hogar = %s AND t.estado = 'P'
+            ORDER BY t.fecha_creacion DESC
+        """, (id_hogar,))
+        tickets = cursor.fetchall()
+        
+        for ticket in tickets:
+            if ticket['fecha_creacion']: ticket['fecha_creacion'] = str(ticket['fecha_creacion'])
+            if ticket['fecha_expiracion']: ticket['fecha_expiracion'] = str(ticket['fecha_expiracion'])
+        
+        return jsonify({"status": "success", "tickets": tickets}), 200
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        if conn and conn.is_connected():
+            cursor.close()
+            conn.close()
+
+@Api.route("/tickets/<int:id_ticket>/estado", methods=["PUT"])
+def actualizar_estado_ticket(id_ticket):
+    conn = get_db_connection()
+    if not conn: return jsonify({"status": "error", "message": "Error de conexión BD"}), 500
+    try:
+        data = request.json
+        nuevo_estado = data.get("estado")
+        if nuevo_estado not in ['A', 'R']:
+            return jsonify({"status": "error", "message": "Estado inválido"}), 400
+        
+        cursor = conn.cursor()
+        cursor.execute("UPDATE ticket SET estado = %s WHERE id = %s", (nuevo_estado, id_ticket))
+        conn.commit()
+        return jsonify({"status": "success", "message": "Ticket actualizado"}), 200
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
     finally:
@@ -849,13 +976,11 @@ def salirse_hogar():
 def desglose():
     conn = get_db_connection()
     if not conn: return jsonify({"status": "error", "message": "Error de conexión BD"}), 500
-    
     try:
         id_usuario = obtener_id_desde_token(request)
         hogar_id = request.args.get('hogar_id')
-
         cursor = conn.cursor()
-        query = """
+        cursor.execute("""
             SELECT categoria.nombre, SUM(monto_individual.monto_abonado)
             FROM monto_individual
             INNER JOIN ticket ON monto_individual.id_ticket = ticket.id
@@ -865,13 +990,10 @@ def desglose():
             AND YEAR(monto_individual.fecha_pago) = YEAR(CURRENT_DATE()) 
             AND monto_individual.id_usuario = %s AND hogar.id = %s
             GROUP BY categoria.nombre
-        """
-        cursor.execute(query, (id_usuario, hogar_id))
-        
+        """, (id_usuario, hogar_id))
         resultado = cursor.fetchall()
         desglose_data = [{"categoria": row[0], "total_abonado": float(row[1])} for row in resultado]
         return jsonify({"status": "success", "desglose": desglose_data}), 200
-
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
     finally:
@@ -879,6 +1001,5 @@ def desglose():
             cursor.close()
             conn.close()
 
-# --- ARRANQUE LOCAL ---
 if __name__ == '__main__':
     Api.run(debug=True, port=5000)
