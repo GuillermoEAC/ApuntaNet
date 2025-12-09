@@ -531,7 +531,6 @@
 
 
 
-# from flask import Flask, jsonify, request
 from flask import Flask, jsonify, request
 import mysql.connector
 from flask_cors import CORS
@@ -542,31 +541,103 @@ import os
 import datetime
 
 # --- CONFIGURACIÓN ---
-# Render espera que la app se llame 'Api' porque tu comando es 'gunicorn main:Api'
-Api = Flask(__name__) 
+Api = Flask(__name__)
 
-# Configura CORS
+# Configuración CORS robusta para producción
 CORS(Api, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
-# Clave secreta
+# Variables de Entorno
 SECRET_KEY = os.environ.get('SECRET_KEY', 'UnaDeCasaParaElGaelPlis')
+DB_HOST = os.environ.get('DB_HOST', 'localhost')
+DB_USER = os.environ.get('DB_USER', 'root')
+DB_PASSWORD = os.environ.get('DB_PASSWORD', 'hola12')
+DB_NAME = os.environ.get('DB_NAME', 'apuntanet_db')
+DB_PORT = int(os.environ.get('DB_PORT', 3306))
 
-# --- FUNCIÓN PARA CONECTAR A LA BD ---
+# --- HELPERS (Funciones de ayuda) ---
+
 def get_db_connection():
+    """Crea una nueva conexión a la base de datos."""
     try:
         connection = mysql.connector.connect(
-            user=os.environ.get('DB_USER', 'root'),
-            password=os.environ.get('DB_PASSWORD', 'hola12'),
-            host=os.environ.get('DB_HOST', 'localhost'),
-            database=os.environ.get('DB_NAME', 'apuntanet_db'),
-            port=int(os.environ.get('DB_PORT', 3306))
+            user=DB_USER, password=DB_PASSWORD,
+            host=DB_HOST, database=DB_NAME, port=DB_PORT
         )
         return connection
     except mysql.connector.Error as err:
         print(f"Error conectando a BD: {err}")
         return None
 
-# --- RUTAS ---
+def obtener_id_desde_token(req):
+    """
+    Busca el token en Body o Headers, lo limpia y devuelve el ID de usuario.
+    Lanza excepciones si falla para que la ruta lo maneje.
+    """
+    token = None
+    # 1. Buscar en Body
+    data = req.get_json(silent=True)
+    if data and 'token' in data:
+        token = data['token']
+    
+    # 2. Buscar en Header
+    if not token:
+        auth_header = req.headers.get('Authorization')
+        if auth_header:
+            token = auth_header
+    
+    if not token:
+        raise Exception("Token no encontrado")
+
+    # 3. Limpiar "Bearer "
+    if "Bearer " in token:
+        token = token.split(" ")[1]
+
+    # 4. Decodificar
+    decoded = jwt.decode(token, SECRET_KEY, algorithms=['HS256'])
+    return decoded['id_usuario']
+
+def crearcodigo(existing_conn):
+    """Genera un código único para el hogar."""
+    codigo = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
+    cursor = existing_conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM hogar WHERE codigo = %s", (codigo,))
+    if cursor.fetchone()[0] > 0:
+        cursor.close()
+        return crearcodigo(existing_conn)
+    cursor.close()
+    return codigo
+
+# --- RUTAS DE AUTENTICACIÓN ---
+
+@Api.route("/registro", methods=['POST'])
+def registro():
+    conn = get_db_connection()
+    if not conn: return jsonify({"status": "error", "message": "Error de conexión BD"}), 500
+
+    try:
+        data = request.get_json()
+        cursor = conn.cursor()
+        # Usamos HEX(AES_ENCRYPT(...)) para compatibilidad binaria
+        query = """
+             INSERT INTO usuarios (usuario, password, correo, telefono)
+             VALUES (%s, HEX(AES_ENCRYPT(%s, %s)), aes_encrypt(%s, %s), aes_encrypt(%s, %s));
+        """
+        cursor.execute(query, (
+            data['usuario'], data['password'], SECRET_KEY, 
+            data['correo'], SECRET_KEY, 
+            data['telefono'], SECRET_KEY
+        ))
+        conn.commit()
+        return jsonify({"status": "Correcto", "message": "Usuario registrado exitosamente"}), 201
+    except mysql.connector.Error as err:
+        return jsonify({"status": "error", "message": f"Error al registrar: {err}"}), 500
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        if conn and conn.is_connected():
+            cursor.close()
+            conn.close()
+
 @Api.route("/login", methods=['POST'])
 def login():
     conn = get_db_connection()
@@ -578,8 +649,7 @@ def login():
         password = data.get('password')
         
         cursor = conn.cursor()
-        
-        # Usamos HEX y AES_ENCRYPT para que coincida con el registro
+        # Comparamos usando HEX(...)
         cursor.execute("""
             SELECT id, usuario 
             FROM usuarios 
@@ -599,49 +669,36 @@ def login():
         else:
             return jsonify({"status": "error", "message": "Credenciales incorrectas"}), 401
     except Exception as e:
-        print(e)
         return jsonify({"status": "error", "message": str(e)}), 500
     finally:
         if conn and conn.is_connected():
             cursor.close()
             conn.close()
+
 # --- RUTAS DE HOGAR ---
 
-@Api.route("/registro", methods=['POST'])
-def registro():
-    conn = get_db_connection()
-    if not conn: return jsonify({"status": "error", "message": "Error de conexión BD"}), 500
-
-    try:
-        data = request.get_json()
-        cursor = conn.cursor()
-        
-        # --- CAMBIO AQUÍ: Usamos HEX(...) para el password ---
-        # Nota: Correo y teléfono pueden quedarse igual si usas CAST(... AS CHAR) al leerlos, 
-        # pero el password es el crítico para el login.
-        cursor.execute("""
-             INSERT INTO usuarios (usuario, password, correo, telefono)
-             VALUES (%s, HEX(AES_ENCRYPT(%s, %s)), aes_encrypt(%s, %s), aes_encrypt(%s, %s));
-        """, (data['usuario'], data['password'], SECRET_KEY, data['correo'], SECRET_KEY, data['telefono'], SECRET_KEY))
-        # ----------------------------------------------------
-        
-        conn.commit()
-        return jsonify({"status": "Correcto", "message": "Usuario registrado exitosamente"}), 201
-    except mysql.connector.Error as err:
-        return jsonify({"status": "error", "message": f"Error al registrar: {err}"}), 500
-    finally:
-        if conn and conn.is_connected():
-            cursor.close()
-            conn.close()
+@Api.route("/bienvenida", methods=['POST'])
+def bienvenida():
+    data = request.get_json()
+    accion = data.get('accion')
+    
+    if accion == 'crear':
+        return crear_hogar(data)
+    elif accion == 'unirse':
+        return unirse_hogar(data)
+    else:
+        return jsonify({"status": "error", "message": "Acción no válida"}), 400
 
 def crear_hogar(data):
     conn = get_db_connection()
     if not conn: return jsonify({"status": "error", "message": "Error de conexión BD"}), 500
     
     try:
-        id_usuario = data.get('id_usuario')
-        codigo = crearcodigo(conn)
+        # Nota: Aquí asumo que tu frontend manda el id_usuario explícitamente en el body para crear
+        # Si quisieras usar el token, usaríamos obtener_id_desde_token(request)
+        id_usuario = data.get('id_usuario') 
         
+        codigo = crearcodigo(conn)
         cursor = conn.cursor()
         
         cursor.execute("SELECT estado FROM usuarios WHERE Id = %s", (id_usuario,))
@@ -661,7 +718,7 @@ def crear_hogar(data):
         return jsonify({"status": "error", "message": str(e)}), 500
     finally:
         if conn and conn.is_connected():
-            cursor.close()
+            if 'cursor' in locals(): cursor.close()
             conn.close()
 
 def unirse_hogar(data):
@@ -669,62 +726,49 @@ def unirse_hogar(data):
     if not conn: return jsonify({"status": "error", "message": "Error de conexión BD"}), 500
 
     try:
-        token = data.get('token').split(" ")[1]
-        decoded = jwt.decode(token, SECRET_KEY, algorithms=['HS256'])
-        id_usuario = decoded['id_usuario']
+        # Aquí usamos la función robusta porque 'unirse' requiere token seguro
+        # Pero como esta funcion recibe 'data' desde bienvenida, intentamos sacar el token del request global
+        id_usuario = obtener_id_desde_token(request)
         
         cursor = conn.cursor()
-        
         cursor.execute("SELECT estado FROM usuarios WHERE Id = %s", (id_usuario,))
         estado = cursor.fetchone()
         if estado and estado[0] == 'A':
             return jsonify({"status": "error", "message": "Ya tienes un hogar"}), 400
 
+        cursor.execute("SELECT id FROM hogar WHERE codigo = %s", (data['codigo'],))
+        hogar_existe = cursor.fetchone()
+        if not hogar_existe:
+             return jsonify({"status": "error", "message": "Código de hogar inválido"}), 404
+
         cursor.execute("""
             INSERT INTO casas_usuarios (id_usuario, id_hogar, fecha_ingreso)
-            VALUES (%s, (SELECT id FROM hogar WHERE codigo = %s LIMIT 1), NOW())
-        """, (id_usuario, data['codigo']))
+            VALUES (%s, %s, NOW())
+        """, (id_usuario, hogar_existe[0]))
         
         cursor.execute("UPDATE usuarios SET estado = 'A' WHERE Id = %s", (id_usuario,))
         conn.commit()
         return jsonify({"status": "Correcto", "message": "Ingreso exitoso"}), 201
+    except jwt.ExpiredSignatureError:
+        return jsonify({"status": "error", "message": "Token expirado"}), 401
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
     finally:
         if conn and conn.is_connected():
-            cursor.close()
+            if 'cursor' in locals(): cursor.close()
             conn.close()
 
-@Api.route("/consultarHogar", methods=['POST'])
 @Api.route("/consultarHogar", methods=['POST'])
 def consultar_hogar():
     conn = get_db_connection()
     if not conn: return jsonify({"status": "error", "message": "Error de conexión BD"}), 500
     
     try:
-        # 1. Intentamos obtener el token del Body (JSON)
-        data = request.get_json(silent=True) or {}
-        token_raw = data.get('token')
-
-        # 2. Si no está en el Body, buscamos en los Headers (Authorization)
-        if not token_raw:
-            token_raw = request.headers.get('Authorization')
-
-        # 3. Si sigue vacío, error
-        if not token_raw:
-            return jsonify({"status": "error", "message": "Token no encontrado"}), 401
-
-        # 4. Limpiamos el prefijo "Bearer " si existe
-        token = token_raw.split(" ")[1] if "Bearer " in token_raw else token_raw
-
-        # Decodificamos
-        decoded_token = jwt.decode(token, SECRET_KEY, algorithms=['HS256'])
-        id_usuario = decoded_token['id_usuario']
+        id_usuario = obtener_id_desde_token(request)
         
         cursor = conn.cursor()
         hogares = []
 
-        # Consulta UNION para traer si es creador o miembro
         query = """
             SELECT h.id, h.nombre, h.descripcion, h.codigo, h.fecha_creacion, 'true' as es_creador
             FROM hogar h WHERE h.id_usuario = %s
@@ -741,12 +785,60 @@ def consultar_hogar():
                 'descripcion': row[2], 
                 'codigo': row[3], 
                 'fecha_creacion': str(row[4]), 
-                'es_creador': (row[5] == 'true' or row[5] == 1) # Aseguramos que sea booleano
+                'es_creador': (row[5] == 'true' or row[5] == 1)
             })
             
         return jsonify({"status": "Correcto", "hogares": hogares}), 200
+    except jwt.ExpiredSignatureError:
+        return jsonify({"status": "error", "message": "Token expirado"}), 401
     except Exception as e:
-        print(f"Error en consultarHogar: {e}") # Esto saldrá en los logs de Render
+        print(f"Error consultarHogar: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        if conn and conn.is_connected():
+            cursor.close()
+            conn.close()
+
+@Api.route("/salirHogar", methods=['POST'])
+def salirse_hogar():
+    conn = get_db_connection()
+    if not conn: return jsonify({"status": "error", "message": "Error de conexión BD"}), 500
+
+    try:
+        id_usuario = obtener_id_desde_token(request)
+        cursor = conn.cursor()
+
+        # Verificar si es Creador (Disuelve el hogar)
+        cursor.execute("SELECT id FROM hogar WHERE id_usuario = %s", (id_usuario,))
+        creador_hogar = cursor.fetchone()
+
+        if creador_hogar:
+            id_hogar = creador_hogar[0]
+            # Liberar a todos los miembros
+            cursor.execute("UPDATE usuarios SET estado = '' WHERE Id IN (SELECT id_usuario FROM casas_usuarios WHERE id_hogar = %s)", (id_hogar,))
+            # Borrar relaciones
+            cursor.execute("DELETE FROM casas_usuarios WHERE id_hogar = %s", (id_hogar,))
+            # Borrar hogar
+            cursor.execute("DELETE FROM hogar WHERE id = %s", (id_hogar,))
+            # Liberar creador
+            cursor.execute("UPDATE usuarios SET estado = '' WHERE Id = %s", (id_usuario,))
+            conn.commit()
+            return jsonify({"status": "Correcto", "message": "Hogar disuelto exitosamente"}), 200
+
+        # Verificar si es Miembro (Solo se sale)
+        cursor.execute("SELECT id_hogar FROM casas_usuarios WHERE id_usuario = %s", (id_usuario,))
+        miembro_hogar = cursor.fetchone()
+
+        if miembro_hogar:
+            id_hogar = miembro_hogar[0]
+            cursor.execute("DELETE FROM casas_usuarios WHERE id_usuario = %s AND id_hogar = %s", (id_usuario, id_hogar))
+            cursor.execute("UPDATE usuarios SET estado = '' WHERE Id = %s", (id_usuario,))
+            conn.commit()
+            return jsonify({"status": "Correcto", "message": "Has salido del hogar"}), 200
+
+        return jsonify({"status": "error", "message": "No perteneces a ningún hogar"}), 400
+
+    except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
     finally:
         if conn and conn.is_connected():
@@ -759,21 +851,11 @@ def desglose():
     if not conn: return jsonify({"status": "error", "message": "Error de conexión BD"}), 500
     
     try:
-        auth_header = request.headers.get('Authorization')
-        if not auth_header:
-            data = request.get_json(silent=True)
-            if data and 'token' in data:
-                auth_header = data['token']
-            else:
-                return jsonify({"status": "error", "message": "Token requerido"}), 401
-
-        token = auth_header.split(" ")[1] if "Bearer" in auth_header else auth_header
-        id_usuario = jwt.decode(token, SECRET_KEY, algorithms=['HS256'])['id_usuario']
+        id_usuario = obtener_id_desde_token(request)
         hogar_id = request.args.get('hogar_id')
 
         cursor = conn.cursor()
-        
-        cursor.execute("""
+        query = """
             SELECT categoria.nombre, SUM(monto_individual.monto_abonado)
             FROM monto_individual
             INNER JOIN ticket ON monto_individual.id_ticket = ticket.id
@@ -783,11 +865,12 @@ def desglose():
             AND YEAR(monto_individual.fecha_pago) = YEAR(CURRENT_DATE()) 
             AND monto_individual.id_usuario = %s AND hogar.id = %s
             GROUP BY categoria.nombre
-        """, (id_usuario, hogar_id))
+        """
+        cursor.execute(query, (id_usuario, hogar_id))
         
         resultado = cursor.fetchall()
-        desglose = [{"categoria": row[0], "total_abonado": float(row[1])} for row in resultado]
-        return jsonify({"status": "success", "desglose": desglose}), 200
+        desglose_data = [{"categoria": row[0], "total_abonado": float(row[1])} for row in resultado]
+        return jsonify({"status": "success", "desglose": desglose_data}), 200
 
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -796,17 +879,6 @@ def desglose():
             cursor.close()
             conn.close()
 
-# --- UTILIDADES ---
-
-def crearcodigo(existing_conn=None):
-    codigo = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
-    if existing_conn:
-        cursor = existing_conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM hogar WHERE codigo = %s", (codigo,))
-        if cursor.fetchone()[0] > 0:
-            return crearcodigo(existing_conn)
-        cursor.close()
-    return codigo
-
+# --- ARRANQUE LOCAL ---
 if __name__ == '__main__':
     Api.run(debug=True, port=5000)
