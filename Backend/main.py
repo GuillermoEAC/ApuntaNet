@@ -696,17 +696,35 @@ def unirse_hogar(data):
             conn.close()
 
 @Api.route("/consultarHogar", methods=['POST'])
+@Api.route("/consultarHogar", methods=['POST'])
 def consultar_hogar():
     conn = get_db_connection()
     if not conn: return jsonify({"status": "error", "message": "Error de conexión BD"}), 500
     
     try:
-        token = request.get_json().get('token').split(" ")[1]
-        id_usuario = jwt.decode(token, SECRET_KEY, algorithms=['HS256'])['id_usuario']
+        # 1. Intentamos obtener el token del Body (JSON)
+        data = request.get_json(silent=True) or {}
+        token_raw = data.get('token')
+
+        # 2. Si no está en el Body, buscamos en los Headers (Authorization)
+        if not token_raw:
+            token_raw = request.headers.get('Authorization')
+
+        # 3. Si sigue vacío, error
+        if not token_raw:
+            return jsonify({"status": "error", "message": "Token no encontrado"}), 401
+
+        # 4. Limpiamos el prefijo "Bearer " si existe
+        token = token_raw.split(" ")[1] if "Bearer " in token_raw else token_raw
+
+        # Decodificamos
+        decoded_token = jwt.decode(token, SECRET_KEY, algorithms=['HS256'])
+        id_usuario = decoded_token['id_usuario']
         
         cursor = conn.cursor()
         hogares = []
 
+        # Consulta UNION para traer si es creador o miembro
         query = """
             SELECT h.id, h.nombre, h.descripcion, h.codigo, h.fecha_creacion, 'true' as es_creador
             FROM hogar h WHERE h.id_usuario = %s
@@ -718,12 +736,17 @@ def consultar_hogar():
         
         for row in cursor.fetchall():
             hogares.append({
-                'id': row[0], 'nombre': row[1], 'descripcion': row[2], 
-                'codigo': row[3], 'fecha_creacion': str(row[4]), 'es_creador': row[5] == 'true'
+                'id': row[0], 
+                'nombre': row[1], 
+                'descripcion': row[2], 
+                'codigo': row[3], 
+                'fecha_creacion': str(row[4]), 
+                'es_creador': (row[5] == 'true' or row[5] == 1) # Aseguramos que sea booleano
             })
             
         return jsonify({"status": "Correcto", "hogares": hogares}), 200
     except Exception as e:
+        print(f"Error en consultarHogar: {e}") # Esto saldrá en los logs de Render
         return jsonify({"status": "error", "message": str(e)}), 500
     finally:
         if conn and conn.is_connected():
