@@ -532,7 +532,8 @@
 
 
 
-from flask import Flask, jsonify, request
+# from flask import Flask, jsonify, request
+from werkzeug.security import generate_password_hash, check_password_hash
 import mysql.connector
 from flask_cors import CORS
 import random
@@ -583,32 +584,41 @@ def verificar_conexion():
         conexion = get_db_connection()
 
 # --- RUTAS ---
-
 @Api.route("/login", methods=['POST'])
 def login():
     verificar_conexion()
     data = request.get_json()
     usuario = data.get('usuario')
-    password = data.get('password')
+    password_texto_plano = data.get('password')
     
     cursor = conexion.cursor()
-    # Nota: Asegúrate que en TiDB exista la función AES_ENCRYPT o usa librería de python para encriptar
-    cursor.execute("""SELECT id,usuario, password 
+    
+    # 1. Traemos la contraseña encriptada (hash) de la BD usando solo el usuario
+    cursor.execute("""SELECT id, usuario, password 
                     FROM usuarios 
-                    WHERE usuario = %s AND password = AES_ENCRYPT(%s, %s)""", 
-                    (usuario, password, SECRET_KEY))
+                    WHERE usuario = %s""", (usuario,))
     resultado = cursor.fetchone()
     cursor.close()
 
     if resultado:
-        token = jwt.encode({
-            'usuario': usuario,
-            'id_usuario': resultado[0]
-        }, SECRET_KEY, algorithm='HS256')
+        id_usuario = resultado[0]
+        nombre_usuario = resultado[1]
+        password_guardada_db = resultado[2] # Este es el hash
 
-        return jsonify({"status": "Correcto", "message": "Inicio de sesión exitoso", "token": token}), 200
-    else:
-        return jsonify({"status": "error", "message": "Credenciales incorrectas"}), 401
+        # 2. Verificamos con la librería de seguridad
+        # check_password_hash(hash_de_la_db, contraseña_que_escribio_usuario)
+        coinciden = check_password_hash(password_guardada_db, password_texto_plano)
+
+        if coinciden:
+            token = jwt.encode({
+                'usuario': nombre_usuario,
+                'id_usuario': id_usuario
+            }, SECRET_KEY, algorithm='HS256')
+
+            return jsonify({"status": "Correcto", "message": "Inicio de sesión exitoso", "token": token}), 200
+    
+    # Si no hay resultado o no coinciden:
+    return jsonify({"status": "error", "message": "Credenciales incorrectas"}), 401
 
 @Api.route("/registro", methods=['POST'])
 def registro():
@@ -619,15 +629,23 @@ def registro():
     correo = data.get('correo')
     telefono = data.get('telefono')
 
+    # ENCRIPTAMOS LA CONTRASEÑA DE FORMA SEGURA (HASH)
+    password_hasheada = generate_password_hash(password)
+
     try:
         cursor = conexion.cursor()
+        # Nota: Quitamos el aes_encrypt del password, pero lo dejamos en correo/telefono si asi lo deseas
         cursor.execute("""
              INSERT INTO usuarios (usuario, password, correo, telefono)
              VALUES (%s, 
-                     aes_encrypt(%s, %s), 
-                     aes_encrypt (%s, %s),
+                     %s,  
+                     aes_encrypt(%s, %s),
                      aes_encrypt(%s, %s));
-        """, (usuario, password, SECRET_KEY, correo, SECRET_KEY, telefono, SECRET_KEY))
+        """, (usuario, 
+              password_hasheada, # <-- Enviamos la hash generada por Python
+              correo, SECRET_KEY, 
+              telefono, SECRET_KEY))
+        
         conexion.commit() 
         return jsonify({"status": "Correcto", "message": "Usuario registrado exitosamente"}), 201
     except mysql.connector.Error as err:
