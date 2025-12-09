@@ -531,8 +531,7 @@
 
 
 
-
-    # from flask import Flask, jsonify, request
+# from flask import Flask, jsonify, request
 from flask import Flask, jsonify, request
 import mysql.connector
 from flask_cors import CORS
@@ -568,32 +567,44 @@ def get_db_connection():
         return None
 
 # --- RUTAS ---
-
-@Api.route("/debug/login", methods=['POST'])
-def debug_login():
+@Api.route("/login", methods=['POST'])
+def login():
     conn = get_db_connection()
-    data = request.get_json()
-    usuario = data.get('usuario')
-    password = data.get('password')
+    if not conn: return jsonify({"status": "error", "message": "Error de conexión BD"}), 500
     
-    cursor = conn.cursor()
-    
-    # 1. Ver qué hay guardado tal cual
-    cursor.execute("SELECT password FROM usuarios WHERE usuario = %s", (usuario,))
-    guardado = cursor.fetchone()
-    
-    # 2. Ver qué genera el sistema con la contraseña que mandas
-    cursor.execute("SELECT HEX(AES_ENCRYPT(%s, %s))", (password, SECRET_KEY))
-    calculado = cursor.fetchone()
-    
-    cursor.close()
-    conn.close()
-    
-    return jsonify({
-        "guardado_en_bd": guardado[0] if guardado else "Usuario no encontrado",
-        "calculado_ahora": calculado[0] if calculado else "Error calculando",
-        "coinciden": (guardado[0] == calculado[0]) if guardado and calculado else False
-    })
+    try:
+        data = request.get_json()
+        usuario = data.get('usuario')
+        password = data.get('password')
+        
+        cursor = conn.cursor()
+        
+        # Usamos HEX y AES_ENCRYPT para que coincida con el registro
+        cursor.execute("""
+            SELECT id, usuario 
+            FROM usuarios 
+            WHERE usuario = %s AND password = HEX(AES_ENCRYPT(%s, %s))
+        """, (usuario, password, SECRET_KEY))
+        
+        resultado = cursor.fetchone()
+        
+        if resultado:
+            token_payload = {
+                'usuario': usuario,
+                'id_usuario': resultado[0],
+                'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=24)
+            }
+            token = jwt.encode(token_payload, SECRET_KEY, algorithm='HS256')
+            return jsonify({"status": "Correcto", "message": "Inicio de sesión exitoso", "token": token}), 200
+        else:
+            return jsonify({"status": "error", "message": "Credenciales incorrectas"}), 401
+    except Exception as e:
+        print(e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        if conn and conn.is_connected():
+            cursor.close()
+            conn.close()
 # --- RUTAS DE HOGAR ---
 
 @Api.route("/registro", methods=['POST'])
