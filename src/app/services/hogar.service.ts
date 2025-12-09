@@ -1,4 +1,3 @@
-// src/app/services/hogar.service.ts
 import { HttpClient } from '@angular/common/http';
 import { Injectable } from '@angular/core';
 import { HttpHeaders } from '@angular/common/http';
@@ -6,72 +5,77 @@ import { Observable } from 'rxjs';
 import { BehaviorSubject } from 'rxjs';
 import { RespuestaHogar } from '../bienvenida/bienvenida.interface';
 
+import { environment } from '../../environments/environment';
+
 @Injectable({ providedIn: 'root' })
-
-
 export class HogarService {
-  private apiUrl = 'http://localhost:5000/bienvenida'; 
-  private apiconsultarhogar = 'http://localhost:5000/consultarHogar';
-  private apisalirHogar = 'http://localhost:5000/salirHogar';
-  private apiresidentes = 'http://localhost:5000';
-  private apicategoriashogar = 'http://localhost:5000/categorias-hogar/agregar';
-  private apicategoriasdisponibles = 'http://localhost:5000/categorias/disponible/';
+  private apiUrl = environment.apiUrl + 'bienvenida';
+  private apiconsultarhogar = environment.apiUrl + 'consultarHogar';
+  private apisalirHogar = environment.apiUrl + 'salirHogar';
+
+  private apiresidentes = environment.apiUrl.replace(/\/$/, '');
+  private apicategoriashogar = environment.apiUrl + 'categorias-hogar/agregar';
+  private apicategoriasdisponibles =
+    environment.apiUrl + 'categorias/disponible/';
 
   constructor(private http: HttpClient) {}
 
-crearHogar(datos: any) {
-  return this.http.post(`${this.apiUrl}`, datos);
-}
+  crearHogar(datos: any) {
+    return this.http.post(`${this.apiUrl}`, datos);
+  }
 
-obtenerHogarActual(token: string): Observable<RespuestaHogar> {
-  const headers = new HttpHeaders({ 'Content-Type': 'application/json' });
-  const body = { token: token };
+  obtenerHogarActual(token: string): Observable<RespuestaHogar> {
+    const headers = new HttpHeaders({ 'Content-Type': 'application/json' });
+    const body = { token: token };
 
-  return this.http.post<RespuestaHogar>(this.apiconsultarhogar, body, { headers });
-}
+    return this.http.post<RespuestaHogar>(this.apiconsultarhogar, body, {
+      headers,
+    });
+  }
 
-salirseDelHogar(token: string) {
-  return this.http.post(`${this.apisalirHogar}`, {
-    token: `Bearer ${token}`
-  });
-}
+  salirseDelHogar(token: string) {
+    return this.http.post(`${this.apisalirHogar}`, {
+      token: `Bearer ${token}`,
+    });
+  }
 
-//
-// // METODOS DE GESTIONAR HOGAR
-//
-agregarCategoriaAHogar(datos: any): Observable<any> {
-  return this.http.post(this.apicategoriashogar, datos);
-}
+  agregarCategoriaAHogar(datos: any): Observable<any> {
+    return this.http.post(this.apicategoriashogar, datos);
+  }
 
-obtenerCategoriasDisponibles(idHogar: number): Observable<any> {
-  return this.http.get(`${this.apicategoriasdisponibles}${idHogar}`);
-}
+  obtenerCategoriasDisponibles(idHogar: number): Observable<any> {
+    return this.http.get(`${this.apicategoriasdisponibles}${idHogar}`);
+  }
 
-obtenerCategoriasSeleccionadas(idHogar: number): Observable<any[]> {
-  return this.http.get<any[]>(`http://localhost:5000/categorias/seleccionadas/${idHogar}`);
-}
+  obtenerCategoriasSeleccionadas(idHogar: number): Observable<any[]> {
+    return this.http.get<any[]>(
+      `${environment.apiUrl}categorias/seleccionadas/${idHogar}`
+    );
+  }
 
-getResidentes(idHogar: number) {  
-  return this.http.get<{ status: string, residentes: any[] }>(
-    `${this.apiresidentes}/hogar/residentes/${idHogar}`
-  );
-}
+  getResidentes(idHogar: number) {
+    return this.http.get<{ status: string; residentes: any[] }>(
+      `${this.apiresidentes}/hogar/residentes/${idHogar}`
+    );
+  }
 
-crearTicket(ticket: any): Observable<any> {
-  return this.http.post(`${this.apiresidentes}/tickets`, ticket);
-}
+  crearTicket(ticket: any): Observable<any> {
+    return this.http.post(`${this.apiresidentes}/tickets`, ticket);
+  }
 
-obtenerTicketsPendientes(idHogar: number): Observable<any> {
-  return this.http.get<any>(`${this.apiresidentes}/tickets/pendientes/${idHogar}`);
-}
+  obtenerTicketsPendientes(idHogar: number): Observable<any> {
+    return this.http.get<any>(
+      `${this.apiresidentes}/tickets/pendientes/${idHogar}`
+    );
+  }
 
-actualizarEstadoTicket(idTicket: number, estado: string): Observable<any> { 
-  return this.http.put<any>(`${this.apiresidentes}/tickets/${idTicket}/estado`, { estado });
-}
+  actualizarEstadoTicket(idTicket: number, estado: string): Observable<any> {
+    return this.http.put<any>(
+      `${this.apiresidentes}/tickets/${idTicket}/estado`,
+      { estado }
+    );
+  }
 
-//
-// // METODOS PARA ENVIAR DATOS DESDE BIENVENIDA A GESTIONAR HOGAR
-//
   private nombreHogarSubject = new BehaviorSubject<string>('');
   nombreHogar$ = this.nombreHogarSubject.asObservable();
 
@@ -117,5 +121,3 @@ actualizarEstadoTicket(idTicket: number, estado: string): Observable<any> {
     return this.idUsuarioSubject.value;
   }
 }
-
-
